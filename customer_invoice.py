@@ -484,13 +484,13 @@ class CustomerInvoiceTab:
             ws.column_dimensions['D'].width = 15
             ws.column_dimensions['E'].width = 15
 
-            # 🔥 Simplified filename (invoice_num already contains timestamp)
+            # 🔥 Save NEW FILE FIRST (CRITICAL FIX)
             customer_name_clean = ''.join(c for c in self.app.customer_name_var.get() if c.isalnum()) or "Customer"
             filename = f"Invoice_{invoice_num}_{customer_name_clean}.xlsx"
-            file_path = os.path.join(invoices_dir, filename)
-            wb.save(file_path)
+            new_file_path = os.path.join(invoices_dir, filename)
+            wb.save(new_file_path)  # ✅ Save before deleting old
 
-            # Update app data
+            # Build invoice items list
             invoice_items = []
             for item in self.app.invoice_items_tree.get_children():
                 values = self.app.invoice_items_tree.item(item)['values']
@@ -506,6 +506,7 @@ class CustomerInvoiceTab:
                     'total': float(values[3])
                 })
 
+            # Create new invoice record with NEW filepath
             new_invoice = {
                 'invoice_number': invoice_num,
                 'customer_name': self.app.customer_name_var.get(),
@@ -515,32 +516,36 @@ class CustomerInvoiceTab:
                 'date': invoice_date,
                 'time': now_pk.strftime("%d-%b-%Y %I:%M %p") if 'now_pk' in locals() else datetime.now().strftime("%d-%b-%Y %I:%M %p"),
                 'status': 'active',
-                'filepath': file_path
+                'filepath': new_file_path  # ✅ Points to new file
             }
 
+            # Handle editing vs new
             if self.app.editing_invoice_number is not None:
-                # Editing existing → replace
+                # Remove old sales entries
                 self.app.sales = [s for s in self.app.sales if s.get('invoice_number') != self.app.editing_invoice_number]
 
-                # --- Safely find and delete OLD invoice file ---
+                # Delete OLD file ONLY AFTER new is saved
                 old_file_path = None
                 for inv in self.app.invoices:
                     if inv.get('invoice_number') == self.app.editing_invoice_number:
                         old_file_path = inv.get('filepath')
                         break
-                if old_file_path and os.path.exists(old_file_path):
-                    try:
-                        os.remove(old_file_path)
-                    except Exception as e:
-                        print(f"Warning: Could not delete old invoice file: {e}")
 
-                # Replace invoice in memory
+                if old_file_path and os.path.exists(old_file_path):
+                    # Avoid self-delete if same path (shouldn't happen, but safe)
+                    if os.path.abspath(old_file_path) != os.path.abspath(new_file_path):
+                        try:
+                            os.remove(old_file_path)
+                        except Exception as e:
+                            print(f"Warning: Could not delete old invoice file: {e}")
+
+                # Replace in memory
                 for i, inv in enumerate(self.app.invoices):
                     if inv.get('invoice_number') == self.app.editing_invoice_number:
                         self.app.invoices[i] = new_invoice
                         break
 
-                # Remove old sales entries from UI tree
+                # Clean UI sales tree
                 if hasattr(self.app, 'sales_tree'):
                     items_to_delete = []
                     for item_id in self.app.sales_tree.get_children():
@@ -551,11 +556,9 @@ class CustomerInvoiceTab:
                     for item_id in items_to_delete:
                         self.app.sales_tree.delete(item_id)
 
-                # Do NOT increment counter when editing
             else:
-                # New invoice → append
+                # New invoice
                 self.app.invoices.append(new_invoice)
-                # 🔥 NO MORE: self.app.invoice_counter += 1
 
             # Update UI trees
             if hasattr(self.app, 'invoices_tree'):
@@ -623,7 +626,7 @@ class CustomerInvoiceTab:
 
             date_obj = datetime.strptime(invoice_date, "%Y-%m-%d")
             date_display = date_obj.strftime("%A, %B %d, %Y")
-            messagebox.showinfo("Success", f"Invoice #{invoice_num} generated for {date_display}\nSaved as:\n{file_path}")
+            messagebox.showinfo("Success", f"Invoice #{invoice_num} generated for {date_display}\nSaved as:\n{new_file_path}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to generate invoice: {str(e)}")
             traceback.print_exc()
